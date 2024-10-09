@@ -2,125 +2,119 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
+#include <string.h>
 
-void sigint_handler(int sigNum);
+#define MAX_MSG_LEN 256
 
-int main() {
-    signal(SIGINT, sigint_handler);
+// Structure for message
+typedef struct {
+    char message[MAX_MSG_LEN];
+    int targetNode;
+    int senderNode;
+} Message;
 
-    //~~~~~~~~~~~~~~~~~~~~~~~~ Number of Nodes from User ~~~~~~~~~~~~~~~~~~~~~~~~
-    int numberOfNodes;
-    printf("How many nodes do you want to create?\n");
-    if (scanf("%d", &numberOfNodes) != 1 || numberOfNodes < 1) {
-        printf("Invalid input\n");
-        return 1;
-    }
+int k;  // Number of nodes (including parent)
+int **pipes;  // Pipes for communication
+int parentPID;  // Parent process ID
 
-    //~~~~~~~~~~~~~~~~~~~~~~~~ Pipes for Parent ~~~~~~~~~~~~~~~~~~~~~~~~ 
-    int parentToFirstChild[2]; // Pipe for Parent to Child 0
-    int lastChildToParent[2];  // Pipe for Last Child to Parent
-    if (pipe(parentToFirstChild) == -1 || pipe(lastChildToParent) == -1) {
-        perror("pipe");
-        exit(1);
-    }
-
-    int previousPipe[2];
-
-    //~~~~~~~~~~~~~~~~~~~~~~~~ Node Creation ~~~~~~~~~~~~~~~~~~~~~~~~ 
-    for (int i = 0; i < numberOfNodes; i++) {
-        int nextPipe[2];
-        if (i < numberOfNodes - 1 && pipe(nextPipe) == -1) {
-            perror("pipe");
-            exit(1);
+// Signal handler for graceful shutdown
+void signalHandler(int sig) {
+    if (getpid() == parentPID) {
+        printf("Shutting down simulation...\n");
+        for (int i = 0; i < k; ++i) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
         }
+        exit(0);
+    }
+}
 
-        pid_t pid = fork();
-        if (pid == -1) {
-            perror("fork");
-            exit(1);
-        }
-
-        if (pid == 0) {
+// Function to create child processes and setup the ring
+void createProcesses() {
+    for (int i = 1; i < k; ++i) {
+        if (fork() == 0) {
             // Child process
-            char message[500];
+            int node = i;
+            Message msg;
+            while (1) {
+                // Read from previous node
+                read(pipes[node][0], &msg, sizeof(Message));
 
-            if (i == 0) { // First child
-                read(parentToFirstChild[0], message, sizeof(message));
-                printf("Child %d received message: %s\n", i, message);
-                write(nextPipe[1], message, sizeof(message)); // Pass message to next child
-                printf("Child %d sent message: %s\n", i, message);
-            } else if (i == numberOfNodes - 1) { // Last child
-                read(previousPipe[0], message, sizeof(message));
-                printf("Child %d received message: %s\n", i, message);
-                write(lastChildToParent[1], message, sizeof(message)); // Send message back to parent
-                printf("Child %d sent message: %s\n", i, message);
-            } else { // Middle children
-                read(previousPipe[0], message, sizeof(message));
-                printf("Child %d received message: %s\n", i, message);
-                write(nextPipe[1], message, sizeof(message)); // Pass message to next child
-                printf("Child %d sent message: %s\n", i, message);
+                if (msg.targetNode != -1) {
+                    printf("Node %d received message from Node %d: \"%s\" (Target: Node %d)\n", 
+                            node, msg.senderNode, msg.message, msg.targetNode);
+
+                    // Check if the message is for this node
+                    if (msg.targetNode == node) {
+                        printf("Node %d: Message received and processed.\n", node);
+                        // Clear the message after processing
+                        msg.targetNode = -1;
+                        strcpy(msg.message, "empty");
+                    }
+                }
+
+                // Forward the message to the next node
+                write(pipes[(node + 1) % k][1], &msg, sizeof(Message));
             }
-            //exit(0); // Exit child process after handling
-        } else {
-            // Parent process
-            if (i > 0) {
-                // After forking child i, close the pipe used by the previous child
-                close(previousPipe[0]); // Close read end for the previous child
-                close(previousPipe[1]); // Close write end for the previous child
-            }
-
-            // Update previousPipe to the newly created nextPipe for the next iteration
-            if (i < numberOfNodes - 1) {
-                previousPipe[0] = nextPipe[0];
-                previousPipe[1] = nextPipe[1];
-            }
-        }
-    }
-
-    while (1) {
-        char message[100];
-        int targetNode;
-
-        // Parent sends a message to the specified child
-        printf("Enter a message to send to the ring: ");
-        scanf(" %[^\n]s", message);  // Read a string message from the user
-
-        printf("Enter the target node (0 to %d): ", numberOfNodes - 1);
-        scanf("%d", &targetNode);
-
-        // Validate target node
-        if (targetNode < 0 || targetNode >= numberOfNodes) {
-            printf("Invalid target node. Please enter a number between 0 and %d.\n", numberOfNodes - 1);
-            continue; // Skip the rest of the loop
-        }
-
-        // Send message to the first child
-        write(parentToFirstChild[1], message, sizeof(message));
-        printf("Parent (Node 0) sent message to child 0\n");
-
-        // Parent waits to receive the message back from the last child
-        char response[500];
-        int currentNode = 0;
-
-        // Process the messages from children until it reaches the target node
-        while (1) {
-            read(lastChildToParent[0], response, sizeof(response));
-            printf("Parent received message: %s from Child %d\n", response, currentNode);
-            
-            // Check if the current node is the target node
-            if (currentNode == targetNode) {
-                printf("Parent received final message back from target Child %d: %s\n", targetNode, response);
-                break; // Exit the loop after receiving the target node's response
-            }
-
-            // Move to the next child in the ring
-            currentNode = (currentNode + 1) % numberOfNodes;
         }
     }
 }
 
-//~~~~~~~~~~~~~~~~~~~~~~~~ Signal Handling ~~~~~~~~~~~~~~~~~~~~~~~~ 
-void sigint_handler(int sigNum) {
-    printf("Signal Received. Exiting...\n");
-    exit(0);
+// Parent process for sending messages
+void parentProcess() {
+    Message msg;
+    char buffer[MAX_MSG_LEN];
+
+    while (1) {
+        // Clear buffer before taking new input
+        memset(buffer, 0, MAX_MSG_LEN);
+
+        // Get message from user
+        printf("Enter the message: ");
+        fgets(buffer, MAX_MSG_LEN, stdin);
+        buffer[strcspn(buffer, "\n")] = 0;  // Remove newline character
+
+        // Get target node from user
+        printf("Enter the destination node (0 to %d): ", k-1);
+        int dest;
+        scanf("%d", &dest);
+        getchar();  // Consume the newline character left by scanf
+
+        // Prepare the message
+        strcpy(msg.message, buffer);
+        msg.targetNode = dest;
+        msg.senderNode = 0;
+
+        // Send the message to the first node (Node 1)
+        write(pipes[1][1], &msg, sizeof(Message));
+
+        // Wait for the apple to return to parent
+        read(pipes[0][0], &msg, sizeof(Message));
+        printf("Parent received the apple back. Ready for next message.\n");
+    }
+}
+
+int main() {
+    printf("Enter the number of nodes (including parent): ");
+    scanf("%d", &k);
+    getchar();  // Consume the newline character left by scanf
+
+    // Setup signal handling
+    parentPID = getpid();
+    signal(SIGINT, signalHandler);
+
+    // Create pipes for communication
+    pipes = malloc(k * sizeof(int*));
+    for (int i = 0; i < k; ++i) {
+        pipes[i] = malloc(2 * sizeof(int));
+        pipe(pipes[i]);  // Create pipe
+    }
+
+    // Create child processes (nodes)
+    createProcesses();
+
+    // Parent process controls message input and passing
+    parentProcess();
+
+    return 0;
 }
