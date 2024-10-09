@@ -8,7 +8,7 @@ void sigint_handler(int sigNum);
 int main() {
     signal(SIGINT, sigint_handler);
 
-    //~~~~~~~~~~~~~~~~~~~~~~~~ Number of Nodes from User~~~~~~~~~~~~~~~~~~~~~~~~
+    //~~~~~~~~~~~~~~~~~~~~~~~~ Number of Nodes from User ~~~~~~~~~~~~~~~~~~~~~~~~
     int numberOfNodes;
     printf("How many nodes do you want to create?\n");
     if (scanf("%d", &numberOfNodes) != 1 || numberOfNodes < 1) {
@@ -48,16 +48,19 @@ int main() {
                 read(parentToFirstChild[0], message, sizeof(message));
                 printf("Child %d received message: %s\n", i, message);
                 write(nextPipe[1], message, sizeof(message)); // Pass message to next child
+                printf("Child %d sent message: %s\n", i, message);
             } else if (i == numberOfNodes - 1) { // Last child
                 read(previousPipe[0], message, sizeof(message));
                 printf("Child %d received message: %s\n", i, message);
                 write(lastChildToParent[1], message, sizeof(message)); // Send message back to parent
+                printf("Child %d sent message: %s\n", i, message);
             } else { // Middle children
                 read(previousPipe[0], message, sizeof(message));
                 printf("Child %d received message: %s\n", i, message);
                 write(nextPipe[1], message, sizeof(message)); // Pass message to next child
+                printf("Child %d sent message: %s\n", i, message);
             }
-            exit(0); // Exit child process after handling
+            //exit(0); // Exit child process after handling
         } else {
             // Parent process
             if (i > 0) {
